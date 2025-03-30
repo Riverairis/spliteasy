@@ -3,7 +3,7 @@ class User {
     private $conn;
     private $table = "users";
 
-    public $id, $last_name, $first_name, $nickname, $email, $username, $password, $account_type;
+    public $id, $last_name, $first_name, $nickname, $email, $username, $password, $account_type, $verification_token, $is_verified;
 
     public function __construct($db) {
         $this->conn = $db;
@@ -13,13 +13,15 @@ class User {
         if (!$this->validate()) return false;
 
         $query = "INSERT INTO " . $this->table . " 
-                  (last_name, first_name, nickname, email, username, password, account_type) 
-                  VALUES (:last_name, :first_name, :nickname, :email, :username, :password, :account_type)";
+                  (last_name, first_name, nickname, email, username, password, account_type, verification_token, is_verified) 
+                  VALUES (:last_name, :first_name, :nickname, :email, :username, :password, :account_type, :verification_token, :is_verified)";
         
         $stmt = $this->conn->prepare($query);
         $this->sanitize();
         $this->password = password_hash($this->password, PASSWORD_DEFAULT);
         $this->account_type = 'standard';
+        $this->verification_token = bin2hex(random_bytes(16)); // Generate a random token
+        $this->is_verified = 0; // Not verified by default
 
         $stmt->bindParam(':last_name', $this->last_name);
         $stmt->bindParam(':first_name', $this->first_name);
@@ -28,6 +30,8 @@ class User {
         $stmt->bindParam(':username', $this->username);
         $stmt->bindParam(':password', $this->password);
         $stmt->bindParam(':account_type', $this->account_type);
+        $stmt->bindParam(':verification_token', $this->verification_token);
+        $stmt->bindParam(':is_verified', $this->is_verified);
 
         return $stmt->execute();
     }
@@ -40,12 +44,22 @@ class User {
 
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
         if ($row && password_verify($this->password, $row['password'])) {
+            if ($row['is_verified'] == 0) {
+                return 'unverified'; // Special case for unverified accounts
+            }
             $this->id = $row['id'];
             $this->account_type = $row['account_type'];
             $this->nickname = $row['nickname'];
             return true;
         }
         return false;
+    }
+
+    public function verify($token) {
+        $query = "UPDATE " . $this->table . " SET is_verified = 1, verification_token = NULL WHERE verification_token = :token AND is_verified = 0";
+        $stmt = $this->conn->prepare($query);
+        $stmt->bindParam(':token', $token);
+        return $stmt->execute() && $stmt->rowCount() > 0;
     }
 
     public function upgradeToPremium() {
@@ -80,3 +94,4 @@ class User {
         $this->username = htmlspecialchars(strip_tags($this->username));
     }
 }
+?>

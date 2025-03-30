@@ -18,42 +18,39 @@ class BillController {
 
         if ($_SESSION['account_type'] === 'standard') {
             if ($this->bill->countBillsThisMonth($this->bill->user_id) >= 5) {
-                $error = "Standard users can only create 5 bills per month.";
-                require_once '../views/dashboard/create_bill.php';
-                return;
+                $_SESSION['error'] = "Standard users can only create 5 bills per month.";
+                return; // Return early, let index.php handle rendering
             }
         }
 
         $bill_id = $this->bill->create();
         if ($bill_id) {
             header("Location: index.php?page=view_bill&id=$bill_id");
+            exit;
         } else {
-            $error = "Failed to create bill.";
-            require_once '../views/dashboard/create_bill.php';
+            $_SESSION['error'] = "Failed to create bill.";
+            return; // Return early, let index.php handle rendering
         }
     }
 
     public function addParticipant($post) {
         if (!isset($post['bill_id']) || empty($post['bill_id'])) {
-            $error = "Invalid bill ID.";
-            $this->viewBill(null); // Redirect to a safe state
-            return;
+            $_SESSION['error'] = "Invalid bill ID.";
+            return; // Return early
         }
 
         $bill_id = $post['bill_id'];
         $bill_exists = $this->bill->getById($bill_id);
 
         if (!$bill_exists) {
-            $error = "Bill does not exist.";
-            $this->viewBill($bill_id);
+            $_SESSION['error'] = "Bill does not exist.";
             return;
         }
 
         $participants = $this->bill->getParticipants($bill_id);
 
         if ($_SESSION['account_type'] === 'standard' && count($participants) >= 3) {
-            $error = "Standard users can only add up to 3 participants per bill.";
-            $this->viewBill($bill_id);
+            $_SESSION['error'] = "Standard users can only add up to 3 participants per bill.";
             return;
         }
 
@@ -73,14 +70,14 @@ class BillController {
                 $stmt->bindParam(':guest_name', $post['guest_name']);
                 $stmt->execute();
             } else {
-                $error = "Please provide a user or guest email.";
-                $this->viewBill($bill_id);
+                $_SESSION['error'] = "Please provide a user or guest email.";
                 return;
             }
             header("Location: index.php?page=view_bill&id=$bill_id");
+            exit;
         } catch (PDOException $e) {
-            $error = "Failed to add participant: " . $e->getMessage();
-            $this->viewBill($bill_id);
+            $_SESSION['error'] = "Failed to add participant: " . $e->getMessage();
+            return;
         }
     }
 
@@ -88,6 +85,11 @@ class BillController {
         $this->bill->user_id = $_SESSION['user_id'];
         if ($this->bill->archive($bill_id)) {
             header("Location: index.php?page=archive");
+            exit;
+        } else {
+            $_SESSION['error'] = "Failed to archive bill.";
+            header("Location: index.php?page=view_bill&id=$bill_id");
+            exit;
         }
     }
 
@@ -96,25 +98,27 @@ class BillController {
         $expense = new Expense($this->db);
         $expense->bill_id = $post['bill_id'];
         $expense->expense_name = $post['expense_name'];
-        $expense->paid_by = $_SESSION['user_id'];
+        $expense->paid_by = $post['paid_by'] ?? $_SESSION['user_id'];
         $expense->amount = $post['amount'];
         $expense->split_type = $post['split_type'];
 
-        if ($expense->create()) {
-            header("Location: index.php?page=view_bill&id=" . $post['bill_id']);
-        } else {
-            $error = "Failed to add expense. Ensure there are participants in the bill.";
-            $this->viewBill($post['bill_id']);
+        $participants = $this->bill->getParticipants($post['bill_id']);
+        if (empty($participants)) {
+            $_SESSION['error'] = "Cannot add expense: No participants in the bill.";
+            return;
         }
-    }
 
-    public function viewGuest($code) {
-        $bill = $this->bill->getByInviteCode($code);
-        if ($bill) {
-            $this->viewBill($bill['id']);
-        } else {
-            $error = "Invalid invite code.";
-            require_once '../views/auth/login.php';
+        try {
+            if ($expense->create()) {
+                header("Location: index.php?page=view_bill&id=" . $post['bill_id']);
+                exit;
+            } else {
+                $_SESSION['error'] = "Failed to add expense. Check participant and bill details.";
+                return;
+            }
+        } catch (Exception $e) {
+            $_SESSION['error'] = "Error adding expense: " . $e->getMessage();
+            return;
         }
     }
 
@@ -132,4 +136,45 @@ class BillController {
 
         require_once '../views/dashboard/view_bill.php';
     }
+
+    public function viewExpense($expense_id) {
+        require_once '../models/Expense.php';
+        require_once '../models/User.php';
+        $expense_model = new Expense($this->db);
+        $user_model = new User($this->db);
+
+        // Fetch the specific expense
+        $query = "SELECT * FROM expenses WHERE id = :id LIMIT 1";
+        $stmt = $this->db->prepare($query);
+        $stmt->bindParam(':id', $expense_id);
+        $stmt->execute();
+        $expense = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$expense) {
+            $_SESSION['error'] = "Expense not found.";
+            header("Location: index.php?page=dashboard");
+            exit;
+        }
+
+        // Fetch the bill for context
+        $bill = $this->bill->getById($expense['bill_id']);
+        // Fetch participants for this bill
+        $participants = $this->bill->getParticipants($expense['bill_id']);
+        // Fetch split details for this expense
+        $splits = $expense_model->getSplits($expense_id);
+
+        require_once '../views/dashboard/view_expense.php';
+    }
+
+    public function viewGuest($code) {
+        $bill = $this->bill->getByInviteCode($code);
+        if ($bill) {
+            $this->viewBill($bill['id']);
+        } else {
+            $_SESSION['error'] = "Invalid invite code.";
+            require_once '../views/auth/login.php';
+        }
+    }
+
+    
 }

@@ -21,19 +21,28 @@ class Expense {
         $stmt->bindParam(':amount', $this->amount);
         $stmt->bindParam(':split_type', $this->split_type);
 
-        if ($stmt->execute()) {
-            $expense_id = $this->conn->lastInsertId();
-            if (!$this->splitExpense($expense_id)) {
-                // If split fails (e.g., no participants), rollback the expense creation
-                $this->conn->exec("DELETE FROM " . $this->table . " WHERE id = $expense_id");
-                return false;
+        // Use a transaction to ensure atomicity
+        $this->conn->beginTransaction();
+        try {
+            if ($stmt->execute()) {
+                $expense_id = $this->conn->lastInsertId();
+                if (!$this->splitExpense($expense_id)) {
+                    $this->conn->rollBack();
+                    return false;
+                }
+                $this->conn->commit();
+                return true;
             }
-            return true;
+            $this->conn->rollBack();
+            return false;
+        } catch (PDOException $e) {
+            $this->conn->rollBack();
+            throw new Exception("Failed to create expense: " . $e->getMessage());
         }
-        return false;
     }
 
     private function splitExpense($expense_id) {
+        require_once '../models/Bill.php'; // Ensure Bill class is included
         $bill = new Bill($this->conn);
         $participants = $bill->getParticipants($this->bill_id);
 
@@ -48,11 +57,13 @@ class Expense {
         $stmt = $this->conn->prepare($query);
 
         foreach ($participants as $participant) {
-            $stmt->bindParam(':expense_id', $expense_id);
-            $stmt->bindParam(':user_id', $participant['user_id']);
-            $stmt->bindParam(':guest_email', $participant['guest_email']);
-            $stmt->bindParam(':amount', $split_amount);
-            $stmt->execute();
+            $stmt->bindValue(':expense_id', $expense_id);
+            $stmt->bindValue(':user_id', $participant['user_id'] ?? null);
+            $stmt->bindValue(':guest_email', $participant['guest_email'] ?? null);
+            $stmt->bindValue(':amount', $split_amount);
+            if (!$stmt->execute()) {
+                return false;
+            }
         }
         return true;
     }

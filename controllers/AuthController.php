@@ -1,4 +1,7 @@
 <?php
+use PHPMailer\PHPMailer\PHPMailer;
+use PHPMailer\PHPMailer\Exception;
+
 class AuthController {
     private $db, $user;
 
@@ -8,6 +11,7 @@ class AuthController {
         $this->db = $database->getConnection();
         require_once '../models/User.php';
         $this->user = new User($this->db);
+        require_once '../vendor/autoload.php';
     }
 
     public function register($post) {
@@ -25,13 +29,42 @@ class AuthController {
         }
 
         if ($this->user->register()) {
-            mail($this->user->email, "Welcome to SplitEasy!", 
-                 "Congrats, {$this->user->first_name}! Login here: http://localhost/SplitEasy/public/index.php?page=login", 
-                 "From: no-reply@spliteasy.com");
-            header("Location: index.php?page=login&success=Registration successful!");
+            $this->sendVerificationEmail($this->user->email, $this->user->first_name, $this->user->verification_token);
+            header("Location: index.php?page=login&success=Registration successful! Please check your email to verify your account.");
         } else {
             $error = "Registration failed. Check your inputs (e.g., unique nickname/username/email required).";
             require_once '../views/auth/register.php';
+        }
+    }
+
+    private function sendVerificationEmail($toEmail, $firstName, $token) {
+        $mail = new PHPMailer(true);
+        try {
+            // Server settings
+            $mail->isSMTP();                                      // Set mailer to use SMTP
+            $mail->Host       = 'smtp.gmail.com';              // Specify your SMTP server (e.g., smtp.gmail.com)
+            $mail->SMTPAuth   = true;                            // Enable SMTP authentication
+            $mail->Username   = 'iris60530@gmail.com';        // SMTP username
+            $mail->Password   = 'mjhjkdeoczmaiusn';           // SMTP password
+            $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;  // Enable TLS encryption
+            $mail->Port       = 587;   
+
+            $mail->setFrom('no-reply@spliteasy.com', 'SplitEasy Team');
+            $mail->addAddress($toEmail);
+
+            $mail->isHTML(true);
+            $mail->Subject = 'Verify Your SplitEasy Account';
+            $verifyLink = "http://localhost/SplitEasy/public/index.php?page=verify_email&token=$token";
+            $mail->Body    = "
+                <h2>Welcome, $firstName!</h2>
+                <p>Please verify your email by clicking the link below:</p>
+                <p><a href='$verifyLink'>Verify Your Account</a></p>
+            ";
+            $mail->AltBody = "Welcome, $firstName! Verify your account here: $verifyLink";
+
+            $mail->send();
+        } catch (Exception $e) {
+            error_log("Failed to send verification email: {$mail->ErrorInfo}");
         }
     }
 
@@ -39,20 +72,32 @@ class AuthController {
         $this->user->username = $post['username'];
         $this->user->password = $post['password'];
 
-        if ($this->user->login()) {
-            // Removed session_start() here
+        $loginResult = $this->user->login();
+        if ($loginResult === true) {
             $_SESSION['user_id'] = $this->user->id;
             $_SESSION['account_type'] = $this->user->account_type;
             $_SESSION['nickname'] = $this->user->nickname;
             header("Location: index.php?page=dashboard");
+        } elseif ($loginResult === 'unverified') {
+            $error = "Your account is not verified. Please check your email for the verification link.";
+            require_once '../views/auth/login.php';
         } else {
             $error = "Invalid username or password.";
             require_once '../views/auth/login.php';
         }
     }
 
+    public function verify($token) {
+        if ($this->user->verify($token)) {
+            $success = "Your account has been verified! You can now log in.";
+            require_once '../views/auth/login.php';
+        } else {
+            $error = "Invalid or expired verification token.";
+            require_once '../views/auth/login.php';
+        }
+    }
+
     public function logout() {
-        // Removed session_start() here
         session_destroy();
         header("Location: index.php?page=login");
     }
@@ -62,3 +107,4 @@ class AuthController {
         require_once '../views/auth/forgot_password.php';
     }
 }
+?>

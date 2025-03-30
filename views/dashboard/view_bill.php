@@ -140,5 +140,12 @@
             <?php endif; ?>
         </div>
     </div>
+
+       <!-- Archive Button (Host Only) -->
+       <?php if (isset($_SESSION['user_id']) && $bill['user_id'] == $_SESSION['user_id'] && !$bill['is_archived']): ?>
+        <a href="index.php?page=archive_bill&id=<?php echo $bill['id']; ?>" class="btn btn-warning mb-4">Archive Bill</a>
+    <?php endif; ?>
 <?php endif; ?>
+
+
 <?php include '../views/layouts/footer.php'; ?>
